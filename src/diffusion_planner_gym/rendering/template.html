@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f6f8; --text: #1d2330; --muted: #6b7280; --border: #d9dde3;
+    --lane: #c3c8d0; --lane-center: #e3e6ea; --route: #8fb3e8; --border-line: #4b5563;
+    --stop: #d1495b; --intersection: rgba(250, 204, 21, 0.12);
+    --ego: #2563eb; --log-ego: rgba(16, 185, 129, 0.35); --raw: #f59e0b; --traj: #7c3aed;
+    --vehicle: #64748b; --pedestrian: #db2777; --bicycle: #0d9488; --unknown: #a3a3a3;
+    --goal: #16a34a; --collision: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #app { display: grid; grid-template-columns: 1fr 300px; grid-template-rows: auto 1fr;
+         height: 100vh; }
+  header { grid-column: 1 / 3; display: flex; gap: 12px; align-items: center;
+           padding: 8px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  header h1 { font-size: 14px; margin: 0; font-weight: 600; white-space: nowrap;
+              overflow: hidden; text-overflow: ellipsis; max-width: 40vw; }
+  #slider { flex: 1; min-width: 160px; }
+  button, select { font: inherit; padding: 3px 10px; border: 1px solid var(--border);
+                   background: var(--panel); color: var(--text); border-radius: 4px; cursor: pointer; }
+  #canvas-wrap { position: relative; overflow: hidden; }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  aside { border-left: 1px solid var(--border); background: var(--panel); padding: 10px 12px;
+          overflow-y: auto; }
+  aside h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+             color: var(--muted); margin: 14px 0 6px; }
+  aside h2:first-child { margin-top: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  td { padding: 2px 0; } td:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+  label { display: flex; align-items: center; gap: 6px; padding: 1px 0; cursor: pointer; }
+  .swatch { width: 12px; height: 3px; display: inline-block; }
+  .alert { color: var(--collision); font-weight: 600; }
+  #hint { position: absolute; left: 8px; bottom: 6px; color: var(--muted); font-size: 11px; }
+  @media (max-width: 760px) {
+    #app { grid-template-columns: 1fr; grid-template-rows: auto 60vh auto; }
+    aside { border-left: none; border-top: 1px solid var(--border); }
+    header h1 { max-width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1 id="title"></h1>
+    <button id="play">Play</button>
+    <select id="speed" title="Playback speed">
+      <option value="0.5">0.5x</option><option value="1" selected>1x</option>
+      <option value="2">2x</option><option value="4">4x</option>
+    </select>
+    <input id="slider" type="range" min="0" value="0" step="1">
+    <span id="frame-label"></span>
+    <button id="reset-view" title="Reset zoom and pan">Reset view</button>
+  </header>
+  <div id="canvas-wrap">
+    <canvas id="canvas"></canvas>
+    <div id="hint">Wheel: zoom · Drag: pan · Space: play/pause · ←/→: step</div>
+  </div>
+  <aside>
+    <h2>State</h2>
+    <table id="state"></table>
+    <h2>Metrics</h2>
+    <table id="metrics"></table>
+    <h2>Layers</h2>
+    <div id="layers"></div>
+  </aside>
+</div>
+<script id="episode-data" type="application/json">__EPISODE_DATA__</script>
+<script>
+"use strict";
+const episode = JSON.parse(document.getElementById("episode-data").textContent);
+const frames = episode.frames;
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+const LAYERS = [
+  ["lanes", "Lanes", "--lane"], ["route", "Route lanes", "--route"],
+  ["borders", "Road borders", "--border-line"], ["stop", "Stop lines", "--stop"],
+  ["intersections", "Intersections", "--intersection"], ["agents", "Agents", "--vehicle"],
+  ["history", "Histories", "--muted"], ["raw", "Planner output", "--raw"],
+  ["trajectory", "Post-processed", "--traj"], ["log", "Logged ego", "--log-ego"],
+  ["goal", "Goal", "--goal"],
+];
+const visible = Object.fromEntries(LAYERS.map(([key]) => [key, true]));
+const layersDiv = document.getElementById("layers");
+for (const [key, name, color] of LAYERS) {
+  const label = document.createElement("label");
+  label.innerHTML = `<input type="checkbox" checked><span class="swatch" style="background:var(${color})"></span>${name}`;
+  label.querySelector("input").addEventListener("change", (e) => { visible[key] = e.target.checked; draw(); });
+  layersDiv.appendChild(label);
+}
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const slider = document.getElementById("slider");
+slider.max = Math.max(frames.length - 1, 0);
+document.getElementById("title").textContent = episode.title;
+
+// View: ego-centric, x (forward) to the right and y (left) up; zoom in pixels per meter.
+// The ego sits at EGO_ANCHOR (fractions of the canvas) shifted by the pan in pixels.
+const EGO_ANCHOR = [0.3, 0.5];
+const DEFAULT_VIEW = { scale: 6, panX: 0, panY: 0 };
+let view = { ...DEFAULT_VIEW };
+let index = 0;
+
+function resize() {
+  const ratio = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * ratio; canvas.height = rect.height * ratio;
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  draw();
+}
+
+// Ego frame (x forward, y left) to screen pixels.
+function toScreen(x, y) {
+  const rect = canvas.getBoundingClientRect();
+  return [rect.width * EGO_ANCHOR[0] + view.panX + x * view.scale,
+          rect.height * EGO_ANCHOR[1] + view.panY - y * view.scale];
+}
+
+function polyline(points, color, width, dash = []) {
+  if (!points || points.length < 2) return;
+  ctx.beginPath();
+  points.forEach(([x, y], i) => { const [u, v] = toScreen(x, y); i ? ctx.lineTo(u, v) : ctx.moveTo(u, v); });
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]);
+}
+
+function polygon(points, fill, stroke) {
+  if (!points || points.length < 3) return;
+  ctx.beginPath();
+  points.forEach(([x, y], i) => { const [u, v] = toScreen(x, y); i ? ctx.lineTo(u, v) : ctx.moveTo(u, v); });
+  ctx.closePath();
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1.5; ctx.stroke(); }
+}
+
+// Corners of a box spanning `front` ahead of and `rear` behind (x, y, yaw).
+function box(x, y, yaw, front, rear, halfWidth) {
+  const c = Math.cos(yaw), s = Math.sin(yaw);
+  return [[front, halfWidth], [front, -halfWidth], [-rear, -halfWidth], [-rear, halfWidth]]
+    .map(([a, b]) => [x + c * a - s * b, y + s * a + c * b]);
+}
+
+function heading(x, y, yaw, length, color) {
+  polyline([[x, y], [x + Math.cos(yaw) * length, y + Math.sin(yaw) * length]], color, 1.5);
+}
+
+function draw() {
+  const rect = canvas.getBoundingClientRect();
+  ctx.fillStyle = css("--bg"); ctx.fillRect(0, 0, rect.width, rect.height);
+  const frame = frames[index];
+  if (!frame) return;
+
+  if (visible.intersections) frame.intersections.forEach((p) => polygon(p, css("--intersection"), null));
+  if (visible.lanes) for (const lane of frame.lanes) {
+    polyline(lane.center, css("--lane-center"), 1, [4, 4]);
+    polyline(lane.left, css("--lane"), 1); polyline(lane.right, css("--lane"), 1);
+  }
+  if (visible.route) for (const lane of frame.route_lanes) polyline(lane.center, css("--route"), 3);
+  if (visible.borders) frame.road_borders.forEach((p) => polyline(p, css("--border-line"), 2));
+  if (visible.stop) frame.stop_lines.forEach((p) => polyline(p, css("--stop"), 3));
+  if (visible.goal && frame.goal) {
+    const [gx, gy, gyaw] = frame.goal; const [u, v] = toScreen(gx, gy);
+    ctx.fillStyle = css("--goal"); ctx.beginPath(); ctx.arc(u, v, 5, 0, 2 * Math.PI); ctx.fill();
+    heading(gx, gy, gyaw, 3, css("--goal"));
+  }
+  if (visible.agents) for (const agent of frame.agents) {
+    const color = css(`--${agent.label}`) || css("--unknown");
+    if (visible.history) polyline(agent.history, color, 1, [2, 3]);
+    if (!agent.observed) continue;
+    const [x, y, yaw] = agent.pose;
+    polygon(box(x, y, yaw, agent.length / 2, agent.length / 2, agent.width / 2), color + "55", color);
+    heading(x, y, yaw, agent.length / 2 + 1, color);
+  }
+  if (visible.log) {
+    const [x, y, yaw] = frame.log_ego.pose;
+    polygon(box(x, y, yaw, frame.ego.front, frame.ego.length - frame.ego.front, frame.ego.width / 2),
+            css("--log-ego"), null);
+  }
+  if (visible.raw) polyline(frame.raw_trajectory, css("--raw"), 2);
+  if (visible.trajectory) polyline(frame.trajectory, css("--traj"), 2.5);
+  if (visible.history) polyline(frame.ego.history, css("--ego"), 1.5, [2, 3]);
+  const collided = frame.metrics.collision === true;
+  const egoColor = collided ? css("--collision") : css("--ego");
+  polygon(box(0, 0, 0, frame.ego.front, frame.ego.length - frame.ego.front, frame.ego.width / 2),
+          egoColor + "44", egoColor);
+  heading(0, 0, 0, frame.ego.front + 1, egoColor);
+
+  updatePanel(frame, collided);
+}
+
+function rows(table, entries) {
+  table.innerHTML = entries.map(([name, value, cls]) =>
+    `<tr><td>${name}</td><td class="${cls || ""}">${value}</td></tr>`).join("");
+}
+
+function fixed(value, digits) { return typeof value === "number" ? value.toFixed(digits) : "-"; }
+
+function updatePanel(frame, collided) {
+  slider.value = index;
+  document.getElementById("frame-label").textContent =
+    `${index + 1}/${frames.length} · ${fixed(frame.time_s, 1)} s`;
+  const optimized = frame.optimized === undefined || frame.optimized === null ? "-"
+    : frame.optimized ? "success" : "failed";
+  rows(document.getElementById("state"), [
+    ["Velocity [m/s]", fixed(frame.ego.velocity, 2)],
+    ["Log velocity [m/s]", fixed(frame.log_ego.velocity, 2)],
+    ["Yaw rate [rad/s]", fixed(frame.ego.yaw_rate, 3)],
+    ["Steering [rad]", fixed(frame.ego.steering, 3)],
+    ["Log steering [rad]", fixed(frame.log_ego.steering, 3)],
+    ["Optimization", optimized, frame.optimized === false ? "alert" : ""],
+  ]);
+  rows(document.getElementById("metrics"), Object.entries(frame.metrics).map(([key, value]) => [
+    key, typeof value === "number" ? value.toFixed(3) : String(value),
+    key === "collision" && collided ? "alert" : "",
+  ]));
+}
+
+// Playback.
+let timer = null;
+const playButton = document.getElementById("play");
+function setPlaying(playing) {
+  if (timer) { clearInterval(timer); timer = null; }
+  playButton.textContent = playing ? "Pause" : "Play";
+  if (!playing) return;
+  if (index >= frames.length - 1) index = 0;
+  const interval = 1000 * episode.dt / Number(document.getElementById("speed").value);
+  timer = setInterval(() => {
+    if (index >= frames.length - 1) { setPlaying(false); return; }
+    index += 1; draw();
+  }, interval);
+}
+playButton.addEventListener("click", () => setPlaying(!timer));
+document.getElementById("speed").addEventListener("change", () => { if (timer) setPlaying(true); });
+slider.addEventListener("input", () => { index = Number(slider.value); draw(); });
+document.getElementById("reset-view").addEventListener("click", () => { view = { ...DEFAULT_VIEW }; draw(); });
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" && e.target.type !== "range") return;
+  if (e.key === " ") { e.preventDefault(); setPlaying(!timer); }
+  else if (e.key === "ArrowRight") { index = Math.min(index + 1, frames.length - 1); draw(); }
+  else if (e.key === "ArrowLeft") { index = Math.max(index - 1, 0); draw(); }
+});
+
+// Zoom around the cursor and pan by dragging.
+canvas.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  const cx = e.clientX - rect.left - rect.width * EGO_ANCHOR[0];
+  const cy = e.clientY - rect.top - rect.height * EGO_ANCHOR[1];
+  view.panX = cx - (cx - view.panX) * factor;
+  view.panY = cy - (cy - view.panY) * factor;
+  view.scale *= factor; draw();
+}, { passive: false });
+let drag = null;
+canvas.addEventListener("pointerdown", (e) => {
+  drag = { x: e.clientX, y: e.clientY, panX: view.panX, panY: view.panY };
+  canvas.setPointerCapture(e.pointerId); canvas.style.cursor = "grabbing";
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!drag) return;
+  view.panX = drag.panX + e.clientX - drag.x;
+  view.panY = drag.panY + e.clientY - drag.y; draw();
+});
+canvas.addEventListener("pointerup", () => { drag = null; canvas.style.cursor = "grab"; });
+
+window.addEventListener("resize", resize);
+resize();
+</script>
+</body>
+</html>
