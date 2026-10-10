@@ -12,6 +12,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ..datatypes import EgoState, Trajectory
+from ..utils.frame import ego_shape_box
 from ..utils.geometry import pose_to_local
 
 AGENT_LABELS = ("vehicle", "pedestrian", "bicycle")
@@ -30,7 +31,7 @@ def make_snapshot(
 ) -> dict[str, Any]:
     """One step; the trajectories planned from it are added with `set_trajectories`."""
     log_pose = pose_to_local(log_ego.pose, ego.pose)
-    front, length, width = (float(v) for v in observation["ego_shape"])
+    front, length, width = ego_shape_box(observation["ego_shape"])
     return {
         "time_s": round(time_s, 2),
         "ego": {

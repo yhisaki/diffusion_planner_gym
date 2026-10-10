@@ -8,6 +8,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from diffusion_planner.data.dimensions import EGO_STEERING_INDEX
+
 from ..datatypes import EgoState, Pose2D, VehicleShape
 from ..utils.geometry import yaw_from_quaternion
 
@@ -22,9 +24,9 @@ class ArrayLogScenario:
         metadata: Mapping[str, NDArray[Any]],
         dt: float,
         vehicle: VehicleShape,
-        steering: NDArray[Any],
     ) -> None:
-        """`steering` holds the tire angle [rad] at each frame."""
+        """`frames` must hold `ego_agent_past`: its current row gives the logged tire
+        angle at each frame."""
         self.name = name
         self.dt = dt
         self.vehicle = vehicle
@@ -36,9 +38,9 @@ class ArrayLogScenario:
         self._yaw = yaw_from_quaternion(metadata)
         self._velocity = np.asarray(metadata["ego_speed_mps"], dtype=np.float64)
         self._yaw_rate = np.asarray(metadata["ego_yaw_rate_rps"], dtype=np.float64)
-        self._steering = np.asarray(steering, dtype=np.float64)
-        if len(self._steering) != self.num_frames:
-            raise ValueError("steering needs one value per frame")
+        self._steering = np.asarray(
+            self._frames["ego_agent_past"][:, -1, EGO_STEERING_INDEX], dtype=np.float64
+        )
 
     def frame(self, index: int, keys: tuple[str, ...]) -> dict[str, NDArray[Any]]:
         return {key: self._frames[key][index] for key in keys}

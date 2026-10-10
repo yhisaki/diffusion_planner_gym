@@ -7,12 +7,27 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
+from diffusion_planner.data.dimensions import (
+    EGO_SHAPE_BASE_LINK_TO_FRONT_INDEX,
+    EGO_SHAPE_LENGTH_INDEX,
+    EGO_SHAPE_WIDTH_INDEX,
+)
+
 from ..datatypes import Pose2D
 from .geometry import inverse_rotate, points_to_local
 
 POSE_KEYS = ("neighbor_agents_past", "goal_pose")
 LANE_KEYS = ("lanes", "route_lanes")
 POLYLINE_KEYS = ("intersection_area", "stop_lines", "road_borders")
+
+
+def ego_shape_box(ego_shape: NDArray[Any]) -> tuple[float, float, float]:
+    """`(base_link_to_front, length, width)` of an `ego_shape` row."""
+    return (
+        float(ego_shape[EGO_SHAPE_BASE_LINK_TO_FRONT_INDEX]),
+        float(ego_shape[EGO_SHAPE_LENGTH_INDEX]),
+        float(ego_shape[EGO_SHAPE_WIDTH_INDEX]),
+    )
 
 
 def recenter_frame(

@@ -14,12 +14,9 @@ from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
-from rosbags.highlevel import AnyReader
 
 from ..datatypes import VehicleShape
 from .array import ArrayLogScenario
-
-STEERING_TOPIC = "/vehicle/status/steering_status"
 
 
 @dataclass(frozen=True)
@@ -42,6 +39,7 @@ class RosbagScenario:
             base_link_to_front=self.vehicle.base_link_to_front,
             vehicle_length=self.vehicle.vehicle_length,
             vehicle_width=self.vehicle.vehicle_width,
+            wheel_base=self.vehicle.wheel_base,
         )
         param = mpd.DatasetBuilderParam()
         param.frame_interval_s = self.frame_interval_s
@@ -57,6 +55,8 @@ class RosbagScenario:
             raise ValueError(f"The rosbag has no usable frames: {self.bag_path}")
 
         # Keep only the requested tensors; the labels are much larger than the inputs.
+        # `ego_agent_past` gives the logged steering of `ArrayLogScenario`.
+        keys = tuple(dict.fromkeys((*keys, "ego_agent_past")))
         frames: dict[str, list[NDArray[Any]]] = {key: [] for key in keys}
         metadata: dict[str, list[NDArray[Any]]] = {}
         while not generator.done:
@@ -76,29 +76,6 @@ class RosbagScenario:
             stacked,
             self.frame_interval_s,
             self.vehicle,
-            self._steering_at(stacked["frame_time_ns"]),
-        )
-
-    def _steering_at(self, time_ns: NDArray[np.int64]) -> NDArray[np.float64]:
-        """The logged tire angle, linearly interpolated at the frame times.
-
-        Read with `rosbags`, which decodes the message definitions embedded in the
-        MCAP written by the Log Scenario Creator.
-        """
-        stamps, angles = [], []
-        with AnyReader([Path(self.bag_path)]) as reader:
-            connections = [c for c in reader.connections if c.topic == STEERING_TOPIC]
-            if not connections:
-                raise ValueError(f"{STEERING_TOPIC} is not in {self.bag_path}")
-            for connection, _, raw in reader.messages(connections=connections):
-                report: Any = reader.deserialize(raw, connection.msgtype)
-                stamps.append(report.stamp.sec * 1_000_000_000 + report.stamp.nanosec)
-                angles.append(report.steering_tire_angle)
-        order = np.argsort(stamps)
-        return np.interp(
-            time_ns.astype(np.float64),
-            np.asarray(stamps, dtype=np.float64)[order],
-            np.asarray(angles, dtype=np.float64)[order],
         )
 
 

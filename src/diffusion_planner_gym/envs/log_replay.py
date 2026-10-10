@@ -12,6 +12,10 @@ from numpy.typing import NDArray
 
 from diffusion_planner.data.dimensions import (
     EGO_HISTORY_LENGTH,
+    EGO_STATE_DIM,
+    EGO_STEERING_INDEX,
+    EGO_VELOCITY_INDEX,
+    EGO_YAW_RATE_INDEX,
     PLANNER_INPUT_SHAPES,
     TRAJECTORY_DIM,
     TRAJECTORY_LENGTH,
@@ -23,7 +27,7 @@ from ..postprocess import PostProcessor, make_postprocessor
 from ..rendering.html import render_episode_html
 from ..rendering.snapshot import make_snapshot, set_trajectories
 from ..scenarios import LogScenario, ScenarioSource, get_log_scenario
-from ..utils.frame import recenter_frame
+from ..utils.frame import ego_shape_box, recenter_frame
 from ..utils.geometry import (
     box_corners,
     boxes_overlap,
@@ -93,7 +97,7 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
         self._scenario: LogScenario | None = None
         self._frame_index = 0
         self._ego = EgoState(Pose2D(0.0, 0.0, 0.0))
-        # World-frame `[x, y, cos, sin, velocity, yaw_rate]` rows, oldest first.
+        # World-frame `[x, y, cos, sin, velocity, steering, yaw_rate]` rows, oldest first.
         self._history: deque[NDArray[np.float64]] = deque(maxlen=EGO_HISTORY_LENGTH)
         self._observation: Observation = {}
 
@@ -125,7 +129,13 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
             pose = pose_to_world(
                 Pose2D(row[0], row[1], np.arctan2(row[3], row[2])), log_pose
             )
-            self._history.append(_history_row(EgoState(pose, row[4], row[5])))
+            ego = EgoState(
+                pose,
+                velocity=row[EGO_VELOCITY_INDEX],
+                yaw_rate=row[EGO_YAW_RATE_INDEX],
+                steering=row[EGO_STEERING_INDEX],
+            )
+            self._history.append(_history_row(ego))
         self.postprocessor.reset(self._ego, log.vehicle)
         self.dynamics.reset(self._ego, log.vehicle)
 
@@ -231,7 +241,7 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
 
     def _collides(self) -> bool:
         """Check the ego box against the current neighbor boxes."""
-        front, length, width = (float(v) for v in self._observation["ego_shape"])
+        front, length, width = ego_shape_box(self._observation["ego_shape"])
         ego = box_corners(Pose2D(0.0, 0.0, 0.0), front, length - front, width / 2)
         poses = self._observation["neighbor_agents_past"][:, -1]
         shapes = self._observation["agent_shape"]
@@ -280,6 +290,9 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
 
 def _history_row(ego: EgoState) -> NDArray[np.float64]:
     pose = ego.pose
-    return np.array(
-        (pose.x, pose.y, np.cos(pose.yaw), np.sin(pose.yaw), ego.velocity, ego.yaw_rate)
-    )
+    row = np.empty(EGO_STATE_DIM)
+    row[0:4] = (pose.x, pose.y, np.cos(pose.yaw), np.sin(pose.yaw))
+    row[EGO_VELOCITY_INDEX] = ego.velocity
+    row[EGO_STEERING_INDEX] = ego.steering
+    row[EGO_YAW_RATE_INDEX] = ego.yaw_rate
+    return row
