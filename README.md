@@ -101,6 +101,18 @@ directory when used. To bundle a new one, archive its directory there with
 `scenarios.pack_log_scenario(dir, "<name>.tar.zst")`. Other directories load with
 `scenarios.log_scenario(path)`.
 
+### CLI
+
+```bash
+diffusion-planner-gym list                       # bundled scenarios
+diffusion-planner-gym run --checkpoint <checkpoint.pth> \
+    [--scenario <name|dir> ...] [--output-dir outputs/simulation_results/] \
+    [--postprocess casadi-optimization] [--dynamics stanley] [--num-envs 16]
+```
+
+`run` runs every bundled scenario by default, in parallel, and writes an HTML replay
+per episode (unless `--no-html`) and `summary.json` to `--output-dir`.
+
 ### Examples
 
 Both take `--checkpoint <checkpoint.pth>` and save each episode as an HTML replay. Run
