@@ -17,6 +17,10 @@ from ..utils.geometry import pose_to_local
 AGENT_LABELS = ("vehicle", "pedestrian", "bicycle")
 
 
+# Interval of the ego footprints drawn along the planned trajectories.
+FOOTPRINT_INTERVAL_S = 0.5
+
+
 def make_snapshot(
     observation: dict[str, NDArray[Any]],
     time_s: float,
@@ -57,6 +61,8 @@ def make_snapshot(
         "metrics": {key: _json_value(value) for key, value in metrics.items()},
         "raw_trajectory": None,
         "trajectory": None,
+        "raw_footprints": None,
+        "footprints": None,
     }
 
 
@@ -69,6 +75,20 @@ def set_trajectories(
     snapshot["raw_trajectory"] = _points(raw[:, :2])
     snapshot["trajectory"] = _points(postprocessed.poses()[:, :2])
     snapshot["optimized"] = optimized
+    # Both trajectories hold one point every `dt` from t = dt.
+    snapshot["raw_footprints"] = _footprint_poses(raw, postprocessed.dt)
+    snapshot["footprints"] = _footprint_poses(postprocessed.poses(), postprocessed.dt)
+
+
+def _footprint_poses(
+    poses: NDArray[Any], dt: float, interval_s: float = FOOTPRINT_INTERVAL_S
+) -> list[list[float]]:
+    """`[x, y, yaw]` of `(T, 4)` `[x, y, cos, sin]` poses every `interval_s` from
+    t = interval_s, given one pose every `dt` from t = dt."""
+    step = max(round(interval_s / dt), 1)
+    sampled = np.asarray(poses, dtype=np.float64)[step - 1 :: step]
+    yaw = np.arctan2(sampled[:, 3], sampled[:, 2])
+    return np.round(np.column_stack((sampled[:, :2], yaw)), 3).tolist()
 
 
 def _points(values: NDArray[Any]) -> list[list[float]]:

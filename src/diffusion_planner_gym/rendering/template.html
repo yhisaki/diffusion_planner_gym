@@ -84,13 +84,14 @@ const LAYERS = [
   ["intersections", "Intersections", "--intersection"], ["agents", "Agents", "--vehicle"],
   ["history", "Histories", "--muted"], ["raw", "Planner output", "--raw"],
   ["trajectory", "Post-processed", "--traj"], ["log", "Logged ego", "--log-ego"],
-  ["goal", "Goal", "--goal"],
+  ["goal", "Goal", "--goal"], ["footprints", "Footprints (1 s)", "--traj", false],
 ];
-const visible = Object.fromEntries(LAYERS.map(([key]) => [key, true]));
+// A fourth element `false` hides the layer initially.
+const visible = Object.fromEntries(LAYERS.map(([key, , , shown]) => [key, shown !== false]));
 const layersDiv = document.getElementById("layers");
 for (const [key, name, color] of LAYERS) {
   const label = document.createElement("label");
-  label.innerHTML = `<input type="checkbox" checked><span class="swatch" style="background:var(${color})"></span>${name}`;
+  label.innerHTML = `<input type="checkbox" ${visible[key] ? "checked" : ""}><span class="swatch" style="background:var(${color})"></span>${name}`;
   label.querySelector("input").addEventListener("change", (e) => { visible[key] = e.target.checked; draw(); });
   layersDiv.appendChild(label);
 }
@@ -181,6 +182,17 @@ function draw() {
     const [x, y, yaw] = frame.log_ego.pose;
     polygon(box(x, y, yaw, frame.ego.front, frame.ego.length - frame.ego.front, frame.ego.width / 2),
             css("--log-ego"), null);
+  }
+  if (visible.footprints) {
+    // Ego boxes along the planned trajectories, one per second.
+    const ego = frame.ego;
+    const drawFootprints = (poses, color) => {
+      for (const [x, y, yaw] of poses || []) {
+        polygon(box(x, y, yaw, ego.front, ego.length - ego.front, ego.width / 2), color + "18", color);
+      }
+    };
+    if (visible.raw) drawFootprints(frame.raw_footprints, css("--raw"));
+    if (visible.trajectory) drawFootprints(frame.footprints, css("--traj"));
   }
   if (visible.raw) polyline(frame.raw_trajectory, css("--raw"), 2);
   if (visible.trajectory) polyline(frame.trajectory, css("--traj"), 2.5);
