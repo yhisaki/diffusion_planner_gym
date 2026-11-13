@@ -53,7 +53,7 @@ def make_snapshot(
             "steering": round(log_ego.steering, 4),
         },
         "lanes": _lanes(observation["lanes"]),
-        "route_lanes": _lanes(observation["route_lanes"]),
+        "route": _points(_valid_rows(observation["route_waypoints"])[:, :2]),
         "road_borders": _polylines(observation["road_borders"]),
         "stop_lines": _polylines(observation["stop_lines"]),
         "intersections": _polylines(observation["intersection_area"]),
@@ -100,17 +100,24 @@ def _valid(values: NDArray[Any]) -> NDArray[np.bool_]:
     return np.any(values.reshape(len(values), -1) != 0, axis=1)
 
 
+def _valid_rows(values: NDArray[Any]) -> NDArray[Any]:
+    """The rows of `(N, D)` `values` that are not all zero."""
+    return values[np.any(values != 0, axis=1)]
+
+
 def _lanes(lanes: NDArray[Any]) -> list[dict[str, list[list[float]]]]:
-    """Center, left, and right polylines of each lane (bounds are center offsets)."""
+    """Center, left, and right polylines of each lane, from its `[left x, y, right x, y]`
+    boundary points (the center is their midpoint)."""
     result = []
     for lane in lanes[_valid(lanes)]:
-        points = lane[np.any(lane != 0, axis=1)]
-        center = points[:, 0:2]
+        points = _valid_rows(lane)
+        left = points[:, 0:2]
+        right = points[:, 2:4]
         result.append(
             {
-                "center": _points(center),
-                "left": _points(center + points[:, 2:4]),
-                "right": _points(center + points[:, 4:6]),
+                "center": _points((left + right) / 2),
+                "left": _points(left),
+                "right": _points(right),
             }
         )
     return result

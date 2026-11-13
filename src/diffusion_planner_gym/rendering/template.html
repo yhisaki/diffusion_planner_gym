@@ -79,7 +79,7 @@ const frames = episode.frames;
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 const LAYERS = [
-  ["lanes", "Lanes", "--lane"], ["route", "Route lanes", "--route"],
+  ["lanes", "Lanes", "--lane"], ["route", "Route", "--route"],
   ["borders", "Road borders", "--border-line"], ["stop", "Stop lines", "--stop"],
   ["intersections", "Intersections", "--intersection"], ["agents", "Agents", "--vehicle"],
   ["history", "Histories", "--muted"], ["raw", "Planner output", "--raw"],
@@ -162,7 +162,7 @@ function draw() {
     polyline(lane.center, css("--lane-center"), 1, [4, 4]);
     polyline(lane.left, css("--lane"), 1); polyline(lane.right, css("--lane"), 1);
   }
-  if (visible.route) for (const lane of frame.route_lanes) polyline(lane.center, css("--route"), 3);
+  if (visible.route) polyline(frame.route, css("--route"), 3);
   if (visible.borders) frame.road_borders.forEach((p) => polyline(p, css("--border-line"), 2));
   if (visible.stop) frame.stop_lines.forEach((p) => polyline(p, css("--stop"), 3));
   if (visible.goal && frame.goal) {
