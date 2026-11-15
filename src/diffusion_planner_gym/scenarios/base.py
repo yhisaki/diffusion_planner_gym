@@ -1,13 +1,14 @@
 """Logged scenarios the simulator replays, independent of where the frames come from.
 
 A `ScenarioSource` describes a scenario (a rosbag with its map, ...) and
-opens it as a `LogScenario`: per-frame ego-centric planner tensors plus the logged
-world ego pose of each frame.
+opens it as a `LogScenario`: the logged world ego state of each frame, and the planner
+inputs of each frame observed by a given (simulated) ego.
 """
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from collections.abc import Sequence
+from typing import Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -24,8 +25,12 @@ class LogScenario(Protocol):
     frame_time_ns: NDArray[np.int64]
     vehicle: VehicleShape
 
-    def frame(self, index: int, keys: tuple[str, ...]) -> dict[str, NDArray[Any]]:
-        """Planner tensors of one frame, in the logged ego frame at that time."""
+    def observe(
+        self, index: int, ego_history: Sequence[EgoState] = ()
+    ) -> dict[str, NDArray[np.float32]]:
+        """The planner inputs of `PLANNER_INPUT_SHAPES` at frame `index`, in the ego
+        frame, with the ego following `ego_history` (world-frame states, oldest
+        first, one every `dt` up to this frame) instead of the log over its span."""
         ...
 
     def ego_state(self, index: int) -> EgoState:
@@ -41,6 +46,6 @@ class ScenarioSource(Protocol):
     @property
     def name(self) -> str: ...
 
-    def open(self, keys: tuple[str, ...]) -> LogScenario:
-        """Open the scenario; `frame()` only needs to serve `keys`."""
+    def open(self) -> LogScenario:
+        """Open the scenario."""
         ...

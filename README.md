@@ -75,8 +75,11 @@ env = gym.make("diffusion-planner-gym/log-replay-v1", scenario="right_turn_001")
 - **Info**: the simulated and logged ego states, the raw and post-processed
   trajectories, and metrics such as `log_position_error` and `collision`.
 
-Its scenarios are rosbags converted to model inputs by `ml_planner_data`, from the
-built ROS 2 workspace:
+Each step's observation is built by `ml_planner_data.build_frame`, the preprocessing of
+the ROS 2 inference node, from the logged messages (`MessageLog`) with the ego odometry
+and steering replaced by the simulated ones (`with_simulated_state`). So the map elements, neighbors, route
+waypoints and ego history are selected around the simulated ego, as at inference. It
+needs the built ROS 2 workspace:
 
 ```bash
 source ros2_ws/install/setup.bash
