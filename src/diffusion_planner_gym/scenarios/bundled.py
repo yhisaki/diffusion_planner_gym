@@ -1,7 +1,7 @@
 """Log scenarios shipped with the package, accessed by name.
 
 Each `diffusion_planner_gym/assets/log_scenarios/<name>.tar.zst` is the directory of a
-scenario saved by the dashboard Log Scenario Creator, archived with `pack_log_scenario`.
+scenario saved by the Log Scenario Creator, archived with `pack_log_scenario`.
 It is extracted to a temporary directory on first use, which is removed at exit.
 """
 

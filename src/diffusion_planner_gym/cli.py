@@ -105,7 +105,7 @@ def _run(args: argparse.Namespace) -> int:
             scenarios.append(spec)
             names.append(spec)
         elif Path(spec).is_dir():
-            # A log scenario directory saved by the dashboard.
+            # A log scenario directory saved by the Log Scenario Creator.
             scenarios.append(log_scenario(spec))
             names.append(Path(spec).resolve().name)
         else:
@@ -171,6 +171,16 @@ def _run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _create_scenario(args: argparse.Namespace) -> int:
+    import subprocess
+    import sys
+
+    app = Path(__file__).with_name("scenario_creator") / "app.py"
+    command = [sys.executable, "-m", "streamlit", "run", str(app), *args.streamlit_args]
+    command += ["--", "--bag", args.bag, "--map", args.map]
+    return subprocess.call(command)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         prog="diffusion-planner-gym",
@@ -209,8 +219,20 @@ def main() -> int:
     )
     run_parser.set_defaults(func=_run)
 
+    create_parser = subparsers.add_parser(
+        "create-scenario",
+        help="Start the Log Scenario Creator app (needs the sourced ROS 2 workspace)",
+    )
+    create_parser.add_argument("--bag", default="", help="Rosbag directory to prefill")
+    create_parser.add_argument("--map", default="", help="Lanelet2 map to prefill")
+    # Other options go to `streamlit run`, e.g. --server.port 8502.
+    create_parser.set_defaults(func=_create_scenario)
+
     argcomplete.autocomplete(parser)
-    args = parser.parse_args()
+    args, extra = parser.parse_known_args()
+    if extra and args.command != "create-scenario":
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
+    args.streamlit_args = extra
     if getattr(args, "device", "") is None:
         import torch
 

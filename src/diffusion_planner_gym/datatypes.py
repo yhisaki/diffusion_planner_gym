@@ -23,7 +23,7 @@ class Pose2D:
 
 @dataclass(frozen=True)
 class VehicleShape:
-    """Same fields as `vehicle_shape.json` of the dashboard Log Scenario Creator."""
+    """Same fields as `vehicle_shape.json` of the Log Scenario Creator."""
 
     base_link_to_front: float
     vehicle_length: float

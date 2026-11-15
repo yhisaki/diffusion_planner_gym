@@ -88,7 +88,7 @@ def rosbag_scenarios(
 
 
 def log_scenario(scenario_dir: str, **kwargs: Any) -> RosbagScenario:
-    """A scenario saved by the dashboard Log Scenario Creator:
+    """A scenario saved by the Log Scenario Creator:
     `bag/`, `map/lanelet2_map.osm`, and `vehicle_shape.json`."""
     root = Path(scenario_dir)
     shape = json.loads((root / "vehicle_shape.json").read_text())

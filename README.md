@@ -84,7 +84,7 @@ source ros2_ws/install/setup.bash
 
 ### Log scenarios
 
-A log scenario is a directory saved by the dashboard **Log Scenario Creator**:
+A log scenario is a directory saved by the [Log Scenario Creator](#log-scenario-creator):
 
 ```
 <name>/
@@ -101,10 +101,42 @@ directory when used. To bundle a new one, archive its directory there with
 `scenarios.pack_log_scenario(dir, "<name>.tar.zst")`. Other directories load with
 `scenarios.log_scenario(path)`.
 
+### Log Scenario Creator
+
+A Streamlit app that cuts a log scenario out of a long rosbag and a large map. Start it
+from the ML-Planner root with the ROS 2 workspace sourced:
+
+```bash
+source ros2_ws/install/setup.bash
+diffusion-planner-gym create-scenario [--bag <rosbag dir>] [--map <lanelet2_map.osm>] \
+    [--server.port 8502]   # other options go to `streamlit run`
+```
+
+1. **Time range**: load the bag, browse the model input frames of the whole bag
+   (with the ego speed and the drive on the map), and select the simulated range
+   with the range slider or *Set start here* / *Set end here* at the shown frame. The
+   saved log adds 4 s before the range (history) and 8 s after it (future).
+2. **Map area**: the kept map is the box around the saved ego track, grown by a
+   margin and per-side extensions, shown on the overview. The route lanelets are
+   kept even outside it.
+3. **Save**: writes the scenario directory, which `run --scenario <dir>` runs, and
+   (by default) archives it as `<dir>.tar.zst`, the format of the bundled scenarios.
+
+Options:
+
+- **Route**: taken from the bag (`/planning/mission_planning/route`; its latest message
+  before the range is copied to the range start), or generated from the ego trajectory
+  (matched to the road lanelets) when selected or when the bag has none. The goal of a
+  generated route is the last ego pose or far ahead along the lanes, so that the route
+  waypoints stay ahead of the ego up to the end of the log.
+- **Tracked objects**: objects selected in the frame view are removed from the whole
+  saved scenario.
+
 ### CLI
 
 ```bash
 diffusion-planner-gym list                       # bundled scenarios
+diffusion-planner-gym create-scenario            # Log Scenario Creator
 diffusion-planner-gym run --checkpoint <checkpoint.pth> \
     [--scenario <name|dir> ...] [--output-dir outputs/simulation_results/] \
     [--postprocess casadi-optimization] [--dynamics stanley] [--num-envs 16]
