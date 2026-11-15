@@ -1,7 +1,8 @@
 """Compact, JSON-ready records of one simulation step for the HTML renderer.
 
-Coordinates are in the simulated ego frame of the step, rounded to centimeters; padded
-(all-zero) map elements and agents are dropped.
+Coordinates are in the simulated ego frame of the step. Polylines are flat lists of
+integer centimeters, delta-encoded point to point (`[x0, y0, x1 - x0, y1 - y0, ...]`)
+to keep the replay small; padded (all-zero) map elements and agents are dropped.
 """
 
 from __future__ import annotations
@@ -92,8 +93,10 @@ def _footprint_poses(
     return np.round(np.column_stack((sampled[:, :2], yaw)), 3).tolist()
 
 
-def _points(values: NDArray[Any]) -> list[list[float]]:
-    return np.round(np.asarray(values, dtype=np.float64), 2).tolist()
+def _points(values: NDArray[Any]) -> list[int]:
+    """`(N, 2)` points as a flat, delta-encoded list of integer centimeters."""
+    cm = np.round(np.asarray(values, dtype=np.float64) * 100).astype(np.int64)
+    return np.diff(cm, axis=0, prepend=0).ravel().tolist()
 
 
 def _valid(values: NDArray[Any]) -> NDArray[np.bool_]:
@@ -105,25 +108,19 @@ def _valid_rows(values: NDArray[Any]) -> NDArray[Any]:
     return values[np.any(values != 0, axis=1)]
 
 
-def _lanes(lanes: NDArray[Any]) -> list[dict[str, list[list[float]]]]:
-    """Center, left, and right polylines of each lane, from its `[left x, y, right x, y]`
-    boundary points (the center is their midpoint)."""
+def _lanes(lanes: NDArray[Any]) -> list[dict[str, list[int]]]:
+    """Left and right polylines of each lane, from its `[left x, y, right x, y]`
+    boundary points (the renderer draws the center as their midpoint)."""
     result = []
     for lane in lanes[_valid(lanes)]:
         points = _valid_rows(lane)
-        left = points[:, 0:2]
-        right = points[:, 2:4]
         result.append(
-            {
-                "center": _points((left + right) / 2),
-                "left": _points(left),
-                "right": _points(right),
-            }
+            {"left": _points(points[:, 0:2]), "right": _points(points[:, 2:4])}
         )
     return result
 
 
-def _polylines(values: NDArray[Any]) -> list[list[list[float]]]:
+def _polylines(values: NDArray[Any]) -> list[list[int]]:
     return [
         _points(polyline[np.any(polyline != 0, axis=1)])
         for polyline in values[_valid(values)]

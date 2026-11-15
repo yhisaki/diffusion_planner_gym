@@ -71,11 +71,49 @@
     <div id="layers"></div>
   </aside>
 </div>
-<script id="episode-data" type="application/json">__EPISODE_DATA__</script>
+<script id="episode-data" type="application/octet-stream">__EPISODE_DATA__</script>
 <script>
 "use strict";
-const episode = JSON.parse(document.getElementById("episode-data").textContent);
-const frames = episode.frames;
+(async () => {
+// The episode JSON is gzip-compressed and base64-encoded (see `html.py`).
+async function loadEpisode() {
+  const base64 = document.getElementById("episode-data").textContent.trim();
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return JSON.parse(await new Response(stream).text());
+}
+
+// Polylines are flat, delta-encoded integer centimeters (see `snapshot.py`).
+function points(flat) {
+  if (!flat) return flat;
+  const result = [];
+  let x = 0, y = 0;
+  for (let i = 0; i + 1 < flat.length; i += 2) {
+    x += flat[i]; y += flat[i + 1];
+    result.push([x / 100, y / 100]);
+  }
+  return result;
+}
+
+function decodeFrame(frame) {
+  frame.ego.history = points(frame.ego.history);
+  frame.lanes = frame.lanes.map((lane) => {
+    const left = points(lane.left), right = points(lane.right);
+    const center = left.map(([x, y], i) => [(x + right[i][0]) / 2, (y + right[i][1]) / 2]);
+    return { left, right, center };
+  });
+  frame.route = points(frame.route);
+  frame.road_borders = frame.road_borders.map(points);
+  frame.stop_lines = frame.stop_lines.map(points);
+  frame.intersections = frame.intersections.map(points);
+  for (const agent of frame.agents) agent.history = points(agent.history);
+  frame.raw_trajectory = points(frame.raw_trajectory);
+  frame.trajectory = points(frame.trajectory);
+  return frame;
+}
+
+const episode = await loadEpisode();
+const frames = episode.frames.map(decodeFrame);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 const LAYERS = [
@@ -283,6 +321,7 @@ canvas.addEventListener("pointerup", () => { drag = null; canvas.style.cursor = 
 
 window.addEventListener("resize", resize);
 resize();
+})();
 </script>
 </body>
 </html>
