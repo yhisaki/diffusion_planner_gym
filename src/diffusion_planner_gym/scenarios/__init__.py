@@ -3,7 +3,6 @@
 `base` defines the interface; each other module is one place the frames come from.
 """
 
-from .array import ArrayLogScenario
 from .base import LogScenario, ScenarioSource
 from .bundled import (
     LOG_SCENARIO_DIR,
@@ -11,12 +10,13 @@ from .bundled import (
     log_scenario_names,
     pack_log_scenario,
 )
+from .message_log import MessageLogScenario
 from .rosbag import RosbagScenario, log_scenario, rosbag_scenarios
 
 __all__ = [
     "LOG_SCENARIO_DIR",
-    "ArrayLogScenario",
     "LogScenario",
+    "MessageLogScenario",
     "RosbagScenario",
     "ScenarioSource",
     "get_log_scenario",

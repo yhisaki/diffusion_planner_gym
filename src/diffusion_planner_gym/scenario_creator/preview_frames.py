@@ -109,39 +109,45 @@ def _generate(args: argparse.Namespace) -> None:
 
     vehicle = VehicleShape(**json.loads(args.vehicle))
     output = Path(args.output)
-    report(0.0, "Selecting frames...")
-    param = mpd.DatasetBuilderParam()
-    param.frame_interval_s = args.frame_interval_s
-    param.min_travel_distance = 0.0
-    generator = mpd.BagFrameGenerator(
-        bag_path=args.bag,
-        map_path=args.map,
-        vehicle_spec=mpd.VehicleSpec(
-            base_link_to_front=vehicle.base_link_to_front,
-            vehicle_length=vehicle.vehicle_length,
-            vehicle_width=vehicle.vehicle_width,
-            wheel_base=vehicle.wheel_base,
-        ),
-        param=param,
+    report(0.0, "Reading the rosbag...")
+    selection_param = mpd.FrameSelectionParam()
+    selection_param.frame_interval_s = args.frame_interval_s
+    selection_param.min_travel_distance = 0.0
+    log = mpd.MessageLog.from_bag(args.bag)
+    selection = mpd.select_frames(log, selection_param)
+    frame_times = selection.frame_time_ns
+    warnings = [str(w) for w in selection.warnings]
+    if selection.skipped or not len(frame_times):
+        raise SystemExit("The rosbag has no usable frames: " + "; ".join(warnings[:5]))
+    report(0.0, "Loading the map...")
+    map_context = mpd.MapContext(args.map)
+    spec = mpd.VehicleSpec(
+        base_link_to_front=vehicle.base_link_to_front,
+        vehicle_length=vehicle.vehicle_length,
+        vehicle_width=vehicle.vehicle_width,
+        wheel_base=vehicle.wheel_base,
     )
-    if generator.skipped:
-        raise SystemExit("The rosbag has no usable frames")
-    chunk_size = 16
-    total = max(int(generator.num_candidates), 1)
-    done = 0
+    chunk_size = 64
     arrays: dict[str, list[NDArray[Any]]] = {
         key: [] for key in (*PREVIEW_KEYS, TIME_KEY)
     }
-    while not generator.done:
-        chunk = generator.next_chunk(chunk_size)
-        done += chunk_size
-        report(min(done / total, 1.0), "Generating frames...")
+    for start in range(0, len(frame_times), chunk_size):
+        report(start / len(frame_times), "Generating frames...")
+        chunk = mpd.build_frames(
+            log,
+            frame_times[start : start + chunk_size],
+            map_context,
+            spec,
+            mpd.FrameBuildParam(),
+            labels=True,
+            require_ego_future=True,
+        )
+        warnings += [f"frame {t}: {reason}" for t, reason in chunk["failures"]]
         if not chunk["frames"]:
             continue
         for key in PREVIEW_KEYS:
             arrays[key].append(chunk["frames"][key])
         arrays[TIME_KEY].append(chunk["metadata"]["frame_time_ns"])
-    warnings = [str(w) for w in generator.warnings]
     if not arrays[TIME_KEY]:
         raise SystemExit("No frame could be generated: " + "; ".join(warnings[:5]))
     np.savez(output, **{key: np.concatenate(v) for key, v in arrays.items()})  # pyright: ignore[reportArgumentType]

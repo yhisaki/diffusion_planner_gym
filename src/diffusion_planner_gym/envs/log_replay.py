@@ -12,10 +12,6 @@ from numpy.typing import NDArray
 
 from diffusion_planner.data.dimensions import (
     EGO_HISTORY_LENGTH,
-    EGO_STATE_DIM,
-    EGO_STEERING_INDEX,
-    EGO_VELOCITY_INDEX,
-    EGO_YAW_RATE_INDEX,
     PLANNER_INPUT_SHAPES,
     TRAJECTORY_DIM,
     TRAJECTORY_LENGTH,
@@ -27,13 +23,10 @@ from ..postprocess import PostProcessor, make_postprocessor
 from ..rendering.html import render_episode_html
 from ..rendering.snapshot import make_snapshot, set_trajectories
 from ..scenarios import LogScenario, ScenarioSource, get_log_scenario
-from ..utils.frame import ego_shape_box, recenter_frame
+from ..utils.frame import ego_shape_box
 from ..utils.geometry import (
     box_corners,
     boxes_overlap,
-    points_to_local,
-    pose_to_local,
-    pose_to_world,
 )
 
 # `spaces.Dict` samples `dict[str, Any]`, so the values are not typed as arrays.
@@ -45,9 +38,9 @@ MAX_FRAME_GAP_RATIO = 1.5
 class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
     """Replay a logged scene while the ego follows the planned trajectory.
 
-    Observation: the planner inputs of `PLANNER_INPUT_SHAPES`, unnormalized, in the
-    simulated ego frame. Action: an ego-frame `(80, 4)` `[x, y, cos, sin]` trajectory
-    sampled every frame interval.
+    Observation: the planner inputs of `PLANNER_INPUT_SHAPES`, unnormalized, built by
+    the scenario with the inference preprocessing around the simulated ego. Action: an
+    ego-frame `(80, 4)` `[x, y, cos, sin]` trajectory sampled every frame interval.
     """
 
     metadata = {"render_modes": ["html"], "render_fps": 10}
@@ -90,15 +83,13 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
         self.action_space = spaces.Box(
             -np.inf, np.inf, shape=(TRAJECTORY_LENGTH, TRAJECTORY_DIM), dtype=np.float32
         )
-        self._scene_keys = tuple(
-            k for k in PLANNER_INPUT_SHAPES if k != "ego_agent_past"
-        )
 
         self._scenario: LogScenario | None = None
         self._frame_index = 0
         self._ego = EgoState(Pose2D(0.0, 0.0, 0.0))
-        # World-frame `[x, y, cos, sin, velocity, steering, yaw_rate]` rows, oldest first.
-        self._history: deque[NDArray[np.float64]] = deque(maxlen=EGO_HISTORY_LENGTH)
+        # Simulated ego states of the last steps, oldest first; they replace the logged
+        # ego over their span (a little more than the input history).
+        self._history: deque[EgoState] = deque(maxlen=EGO_HISTORY_LENGTH + 10)
         self._observation: Observation = {}
 
     def reset(
@@ -111,7 +102,7 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
         super().reset(seed=seed)
         options = options or {}
         if self._scenario is None:
-            self._scenario = self.scenario.open(tuple(PLANNER_INPUT_SHAPES))
+            self._scenario = self.scenario.open()
         log = self._scenario
         self._frame_index = int(options.get("start_frame", 0))
         self._hold_steps = 0
@@ -120,22 +111,11 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
                 f"start_frame {self._frame_index} is out of range: {self.scenario.name}"
             )
 
-        # The logged ego state and history seed the simulated ones.
+        # The logged ego state seeds the simulated one; the history before it is
+        # the logged one.
         self._ego = log.ego_state(self._frame_index)
-        log_pose = self._ego.pose
-        past = log.frame(self._frame_index, ("ego_agent_past",))["ego_agent_past"]
         self._history.clear()
-        for row in past.astype(np.float64):
-            pose = pose_to_world(
-                Pose2D(row[0], row[1], np.arctan2(row[3], row[2])), log_pose
-            )
-            ego = EgoState(
-                pose,
-                velocity=row[EGO_VELOCITY_INDEX],
-                yaw_rate=row[EGO_YAW_RATE_INDEX],
-                steering=row[EGO_STEERING_INDEX],
-            )
-            self._history.append(_history_row(ego))
+        self._history.append(self._ego)
         self.postprocessor.reset(self._ego, log.vehicle)
         self.dynamics.reset(self._ego, log.vehicle)
 
@@ -152,7 +132,7 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
         raw = np.asarray(action, dtype=np.float32)
         trajectory = self.postprocessor(raw, self._ego, self._observation)
         self._ego = self.dynamics.step(self._ego, trajectory, scenario.dt)
-        self._history.append(_history_row(self._ego))
+        self._history.append(self._ego)
         last_frame = scenario.num_frames - 1
         gap_s = 0.0
         if self._frame_index < last_frame:
@@ -222,21 +202,11 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
             raise RuntimeError("Call reset() before step()")
         return self._scenario
 
-    def _sim_pose_in_log_frame(self) -> Pose2D:
-        log_pose = self._require_scenario().ego_state(self._frame_index).pose
-        return pose_to_local(self._ego.pose, log_pose)
-
     def _observe(self) -> Observation:
-        frame = self._require_scenario().frame(self._frame_index, self._scene_keys)
-        observation = recenter_frame(frame, self._sim_pose_in_log_frame())
-
-        history = np.stack(self._history)
-        ego_past = history.copy()
-        ego_past[:, 0:2] = points_to_local(history[:, 0:2], self._ego.pose)
-        yaw = np.arctan2(history[:, 3], history[:, 2]) - self._ego.pose.yaw
-        ego_past[:, 2] = np.cos(yaw)
-        ego_past[:, 3] = np.sin(yaw)
-        observation["ego_agent_past"] = ego_past
+        # During the log end hold, the history is stamped back from the held frame.
+        observation = self._require_scenario().observe(
+            self._frame_index, tuple(self._history)
+        )
         return {k: v.astype(np.float32, copy=False) for k, v in observation.items()}
 
     def _collides(self) -> bool:
@@ -286,13 +256,3 @@ class LogReplayEnv(gym.Env[Observation, NDArray[np.float32]]):
                 ),
             },
         }
-
-
-def _history_row(ego: EgoState) -> NDArray[np.float64]:
-    pose = ego.pose
-    row = np.empty(EGO_STATE_DIM)
-    row[0:4] = (pose.x, pose.y, np.cos(pose.yaw), np.sin(pose.yaw))
-    row[EGO_VELOCITY_INDEX] = ego.velocity
-    row[EGO_STEERING_INDEX] = ego.steering
-    row[EGO_YAW_RATE_INDEX] = ego.yaw_rate
-    return row
